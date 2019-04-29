@@ -3,6 +3,7 @@ package client // import "github.com/influxdata/influxdb1-client/v2"
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"io/ioutil"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -25,6 +27,9 @@ type HTTPConfig struct {
 	// Addr should be of the form "http://host:port"
 	// or "http://[ipv6-host%zone]:port".
 	Addr string
+
+	// UnixSocket is the path for a unix socket
+	UnixSocket string
 
 	// Username is the influxdb username, optional.
 	Username string
@@ -93,15 +98,6 @@ func NewHTTPClient(conf HTTPConfig) (Client, error) {
 		conf.UserAgent = "InfluxDBClient"
 	}
 
-	u, err := url.Parse(conf.Addr)
-	if err != nil {
-		return nil, err
-	} else if u.Scheme != "http" && u.Scheme != "https" {
-		m := fmt.Sprintf("Unsupported protocol scheme: %s, your address"+
-			" must start with http:// or https://", u.Scheme)
-		return nil, errors.New(m)
-	}
-
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: conf.InsecureSkipVerify,
@@ -111,6 +107,29 @@ func NewHTTPClient(conf HTTPConfig) (Client, error) {
 	if conf.TLSConfig != nil {
 		tr.TLSClientConfig = conf.TLSConfig
 	}
+
+	u, err := url.Parse(conf.Addr)
+	if err != nil {
+		return nil, err
+	}
+	if conf.UnixSocket != "" {
+		// No need for compression in local communications.
+		tr.DisableCompression = true
+
+		tr.DialContext = func(_ context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", conf.UnixSocket)
+		}
+		u = &url.URL{
+			Scheme: "http",
+			Host:   "localhost:8086",
+		}
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		m := fmt.Sprintf("Unsupported protocol scheme: %s, your address"+
+			" must start with http:// or https://", u.Scheme)
+		return nil, errors.New(m)
+	}
+
 	return &client{
 		url:       *u,
 		username:  conf.Username,
